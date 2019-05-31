@@ -1,0 +1,12 @@
+[package]
+name = "outrotate"
+version = "0.1.0"
+authors = ["Bachue Zhou <bachue.shu@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+clap = "2.33.0"
+error-chain = "0.12.1"
+os_pipe = "0.8.1"
+regex = "1.1.6"
+flate2 = "1.0.7"
