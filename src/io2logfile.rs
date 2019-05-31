@@ -10,6 +10,7 @@ use std::ffi::OsStr;
 use error_chain::error_chain;
 use regex::Regex;
 use flate2::{GzBuilder,Compression};
+use lockfile::Lockfile;
 
 error_chain! {
     errors {
@@ -155,7 +156,11 @@ where
     }
 
     fn rotatelogs(&mut self) -> Result<()> {
-        // write lock file duration rotate
+        let lock_file = Lockfile::create(self.dest_dir.join("rotate.lock"));
+        if lock_file.is_err() {
+            return Ok(());
+        }
+
         let entry_names = {
             let mut file_names = self
                 .dest_dir
