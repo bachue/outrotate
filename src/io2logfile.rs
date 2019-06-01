@@ -11,12 +11,17 @@ use error_chain::error_chain;
 use regex::Regex;
 use flate2::{GzBuilder,Compression};
 use lockfile::Lockfile;
+use fs2::FileExt;
 
 error_chain! {
     errors {
         InvalidFileName(b: Vec<u8>) {
             description("filename includes invalid unicode data")
             display("Filename includes invalid unicode data: '{:?}'", b)
+        }
+        FileLocked(path: PathBuf) {
+            description("Log file is locked, maybe there's another outrotate instance is running")
+            display("Log file `{}` is locked, maybe there's another outrotate instance is running", path.display())
         }
     }
     foreign_links {
@@ -93,6 +98,10 @@ where
             .append(true)
             .create(true)
             .open(logfile_path.as_ref())?;
+        if dest_file.try_lock_exclusive().is_err() {
+            let _ = fs::remove_file(logfile_path.as_ref());
+            return Err(ErrorKind::FileLocked(logfile_path.as_ref().to_path_buf()).into());
+        }
         let dest_file_name = Self::convert_osstring_to_string(
             logfile_path.as_ref().file_name().unwrap().to_os_string(),
         )?;
@@ -106,7 +115,6 @@ where
             + r"(\d+)\.gz$";
         let dest_file_name_matcher = Regex::new(&dest_file_name_matcher_regex)?;
         let dest_file_gz_name_matcher = Regex::new(&dest_file_gz_name_matcher_regex)?;
-        // TODO: lock log file here
 
         Ok(LogFileRedirectWorker {
             logfile_size_bytes: dest_file.metadata()?.size(),
@@ -146,7 +154,12 @@ where
                 // TODO: write to the dest file continueously
                 // TODO: rotate logs async
                 self.rotatelogs()?;
-                self.dest = BufWriter::with_capacity(1 << 12, File::create(&self.dest_file_path)?);
+                let new_log_file = {
+                    let file = File::create(&self.dest_file_path)?;
+                    file.try_lock_exclusive()?;
+                    file
+                };
+                self.dest = BufWriter::with_capacity(1 << 12, new_log_file);
                 self.logfile_size_bytes = 0;
             }
             self.dest.write_all(buf.as_bytes())?;
@@ -211,10 +224,10 @@ where
             new_file_name += ".gz"
         }
         if !gziped && self.compress_logfile {
-            Self::gzip_file(
-                self.dest_dir.join(file_name.as_ref()),
-                self.dest_dir.join(new_file_name),
-            )?;
+            let tmp_file_path = self.dest_dir.join(new_file_name.clone() + ".tmp");
+            fs::rename(self.dest_dir.join(file_name.as_ref()), &tmp_file_path)?;
+            Self::gzip_file(&tmp_file_path, self.dest_dir.join(new_file_name))?;
+            fs::remove_file(&tmp_file_path)?;
         } else {
             fs::rename(
                 self.dest_dir.join(file_name.as_ref()),
